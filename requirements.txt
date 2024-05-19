@@ -1,4 +1,2 @@
 openai
-flask
-flask[async]
 python-telegram-bot
