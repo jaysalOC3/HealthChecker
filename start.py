@@ -1,6 +1,6 @@
 import logging
+import asyncio
 from typing import Optional, Tuple
-
 from telegram import Chat, ChatMember, ChatMemberUpdated, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
@@ -11,156 +11,121 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+import os
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from flask import Flask, request, jsonify
+from werkzeug.exceptions import HTTPException
+from openai import OpenAI
+import concurrent.futures  # For thread pool
 
-# Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
 )
-logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+logger.info("Starting Bot and Web Server.")
 
-# Replace with your actual Telegram Bot API token
-bot_token = '6308464888:AAFmfSayfq9uUoH4GmLx5sFX_Ebk1C8nhSc'
-mirror_group = -4262702861
-# Authorized chats (replace with actual chat IDs)
-AUTHORIZED_CHATS = {
-    # Example chat IDs:
-    7133140884,  # Private chat with you
-    -4262702861, # Group chat you want to monitor
+# --- OpenAI Configuration ---
+client = OpenAI()  # Initialize OpenAI client
+system_message = {
+    "role": "system",
+    "content": "Your primary goal is to help the user identify potential triggers...",
 }
 
-# Function to extract status changes (unchanged from the example)
-def extract_status_change(
-    chat_member_update: ChatMemberUpdated,
-) -> Optional[Tuple[bool, bool]]:
-    # ... (same as in the example)
-    pass
+# Chat history storage
+chat_history = {}  
 
-# Function to track chats (unchanged from the example)
-async def track_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Tracks the chats the bot is in."""
-    result = extract_status_change(update.my_chat_member)
-    if result is None:
-        return
-    was_member, is_member = result
+app = Flask(__name__)
+port = int(os.environ.get("PORT", 8080))
 
-    # Let's check who is responsible for the change
-    cause_name = update.effective_user.full_name
+# Use a thread pool executor
+executor = concurrent.futures.ThreadPoolExecutor()
 
-    # Handle chat types differently:
-    chat = update.effective_chat
-    if chat.type == Chat.PRIVATE:
-        if not was_member and is_member:
-            # This may not be really needed in practice because most clients will automatically
-            # send a /start command after the user unblocks the bot, and start_private_chat()
-            # will add the user to "user_ids".
-            # We're including this here for the sake of the example.
-            logger.info("%s unblocked the bot", cause_name)
-            context.bot_data.setdefault("user_ids", set()).add(chat.id)
-        elif was_member and not is_member:
-            logger.info("%s blocked the bot", cause_name)
-            context.bot_data.setdefault("user_ids", set()).discard(chat.id)
-    elif chat.type in [Chat.GROUP, Chat.SUPERGROUP]:
-        if not was_member and is_member:
-            logger.info("%s added the bot to the group %s", cause_name, chat.title)
-            context.bot_data.setdefault("group_ids", set()).add(chat.id)
-        elif was_member and not is_member:
-            logger.info("%s removed the bot from the group %s", cause_name, chat.title)
-            context.bot_data.setdefault("group_ids", set()).discard(chat.id)
-    elif not was_member and is_member:
-        logger.info("%s added the bot to the channel %s", cause_name, chat.title)
-        context.bot_data.setdefault("channel_ids", set()).add(chat.id)
-    elif was_member and not is_member:
-        logger.info("%s removed the bot from the channel %s", cause_name, chat.title)
-        context.bot_data.setdefault("channel_ids", set()).discard(chat.id)
+@app.route("/checkin", methods=["GET"])
+def checkin():
+    user_id = request.args.get("user_id")
+    # Submit the coroutine to the executor
+    executor.submit(asyncio.run, start_checkin_conversation(user_id, application.bot))
+    return jsonify({"message": "Check-in conversation initiated"}), 200
 
-# Function to show chats (unchanged from the example)
-async def show_chats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shows which chats the bot is in"""
-    user_ids = ", ".join(str(uid) for uid in context.bot_data.setdefault("user_ids", set()))
-    group_ids = ", ".join(str(gid) for gid in context.bot_data.setdefault("group_ids", set()))
-    channel_ids = ", ".join(str(cid) for cid in context.bot_data.setdefault("channel_ids", set()))
-    text = (
-        f"@{context.bot.username} is currently in a conversation with the user IDs {user_ids}."
-        f" Moreover it is a member of the groups with IDs {group_ids} "
-        f"and administrator in the channels with IDs {channel_ids}."
-    )
-    await update.effective_message.reply_text(text)
 
-# Mood Tracking Functionality
-async def mood_check(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends a mood check message to the user."""
-    chat_id = update.effective_chat.id
-    if chat_id not in AUTHORIZED_CHATS:
-        return  # Ignore updates from unauthorized chats
-    
-    await update.effective_chat.send_message(
-        "How are you feeling right now? Any triggers?"
-    )
-
-# Add this handler to trigger mood checks periodically
-async def periodic_mood_check(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Sends mood checks to all known chats."""
-    
-    await context.bot.send_message(chat_id=mirror_group, text="Checking in. Any triggers?")
-
-# Function to greet members (unchanged from the example)
-async def greet_chat_members(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Greets new users in chats and announces when someone leaves"""
-    result = extract_status_change(update.chat_member)
-    if result is None:
-        return
-
-    was_member, is_member = result
-    cause_name = update.chat_member.from_user.mention_html()
-    member_name = update.chat_member.new_chat_member.user.mention_html()
-
-    if not was_member and is_member:
-        await update.effective_chat.send_message(
-            f"{member_name} was added by {cause_name}. Welcome!",
-            parse_mode=ParseMode.HTML,
+async def start_checkin_conversation(user_id, bot):
+    try:
+        chat_history[user_id] = [system_message]
+        await bot.send_message(
+            chat_id=-4262702861, text="Hey, I wanted to check in on how you're feeling."
         )
-    elif was_member and not is_member:
-        await update.effective_chat.send_message(
-            f"{member_name} is no longer with us. Thanks a lot, {cause_name} ...",
-            parse_mode=ParseMode.HTML,
-        )
+    except Exception as e:
+        logger.error(f"Error initiating check-in conversation: {e}")
 
-# Function to start private chat (unchanged from the example)
-async def start_private_chat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Greets the user and records that they started a chat with the bot if it's a private chat.
-    Since no `my_chat_member` update is issued when a user starts a private chat with the bot
-    for the first time, we have to track it explicitly here.
-    """
-    user_name = update.effective_user.full_name
-    chat = update.effective_chat
-    if chat.type != Chat.PRIVATE or chat.id in context.bot_data.get("user_ids", set()):
-        return
 
-    logger.info("%s started a private chat with the bot", user_name)
-    context.bot_data.setdefault("user_ids", set()).add(chat.id)
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    message_text = update.message.text
 
-    await update.effective_message.reply_text(
-        f"Welcome {user_name}. Use /show_chats to see what chats I'm in."
+    # Initialize chat history if not present
+    if user_id not in chat_history:
+        chat_history[user_id] = [system_message]
+        context.bot.send_message(
+            chat_id=user_id, text="Hi there! Let's start our conversation."
+        )  # Optionally, send a welcome message
+
+    chat_history[user_id].append({"role": "user", "content": message_text})
+    completion = client.chat.completions.create(
+        model="gpt-3.5-turbo", messages=chat_history[user_id]
     )
+    response_message = completion.choices[0].message
+    chat_history[user_id].append(response_message)
+
+    context.bot.send_message(chat_id=user_id, text=response_message.content)
+
+class MyHTTPRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        path = self.path
+        query = {}
+        if '?' in path:
+            path, query_string = path.split('?', 1)
+            query = dict(param.split('=') for param in query_string.split('&'))
+        
+        with app.test_request_context(path=path, query_string=query):
+            try:
+                response = app.full_dispatch_request()
+            except HTTPException as e:
+                response = app.make_response(jsonify({'error': str(e)}), e.code)
+        
+        self.send_response(response.status_code)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(response.get_data())
 
 def main() -> None:
-    """Start the bot."""
-    application = Application.builder().token(bot_token).build()
+    httpd = ThreadingHTTPServer(("", port), MyHTTPRequestHandler)
+    import threading
+    httpd_thread = threading.Thread(target=httpd.serve_forever)
+    httpd_thread.start()
 
-    # Add handlers
-    application.add_handler(ChatMemberHandler(track_chats, ChatMemberHandler.MY_CHAT_MEMBER))
-    application.add_handler(CommandHandler("show_chats", show_chats))
-    application.add_handler(CommandHandler("mood_check", mood_check)) # New mood check command
+    global application
+    application = Application.builder().token('6308464888:AAFmfSayfq9uUoH4GmLx5sFX_Ebk1C8nhSc').build()
+    message_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_user_message)
+    application.add_handler(message_handler)
 
-    # Schedule periodic mood checks (adjust frequency as needed)
-    application.job_queue.run_repeating(periodic_mood_check, interval=10)  # every 4 hours 
-    
-    application.add_handler(ChatMemberHandler(greet_chat_members, ChatMemberHandler.CHAT_MEMBER))
-    application.add_handler(MessageHandler(filters.ALL, start_private_chat))
+    async def run_bot():
+        async with application:
+            await application.initialize()  
+            await application.start()
+            await asyncio.to_thread(httpd.serve_forever)
+            await application.stop()
+            await application.shutdown()
 
-    # Run the bot
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Create a dedicated loop for the bot
+    bot_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(bot_loop)  
+
+    try:
+        bot_loop.run_until_complete(run_bot())
+    finally:
+        bot_loop.close()
+
 
 if __name__ == "__main__":
     main()
