@@ -2,11 +2,10 @@
 # pylint: disable=unused-argument
 # This program is dedicated to the public domain under the CC0 license.
 
-"""
-ConversationHandler bot to help users identify substance use triggers.
-"""
 import asyncio
 import logging
+from threading import Thread
+from flask import Flask, jsonify
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
@@ -172,7 +171,7 @@ async def listen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     messages = context.user_data.get('messages', [])
     messages.append({"role": "user", "content": update.message.text})
 
-    logger.info(f"To GPT: {messages}")
+    #logger.info(f"To GPT: {messages}")
     completion = client.chat.completions.create(
         model="gpt-4",
         messages=messages
@@ -248,7 +247,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Bye! I hope we can talk again some day.", reply_markup=ReplyKeyboardRemove())
     return END
 
-def main() -> None:
+def run_bot():
     application = Application.builder().token("6308464888:AAHERpabVtNcFPDLuVzUG-Oq_W2CU1-ITeA").build()
 
     conv_handler = ConversationHandler(
@@ -265,12 +264,25 @@ def main() -> None:
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        allow_reentry=True,  # Add this line
+        allow_reentry=True,
     )
 
     application.add_handler(conv_handler)
+    asyncio.run(application.run_polling())
 
-    application.run_polling()
+# Flask server
+app = Flask(__name__)
+
+@app.route("/", methods=["GET"])
+def health_check():
+    return jsonify({"status": "running"})
+
+def run_flask():
+    app.run(host="0.0.0.0", port=8080)
 
 if __name__ == "__main__":
-    main()
+    flask_thread = Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    run_bot()
