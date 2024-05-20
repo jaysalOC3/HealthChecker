@@ -1,0 +1,31 @@
+steps:
+  # Build the container image (with added steps)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/$IMAGE_NAME:$COMMIT_SHA', '.']
+  - name: 'gcr.io/cloud-builders/docker' # Install Dependencies
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install --no-cache-dir -r requirements.txt
+
+  # Push the container image to Container Registry (unchanged)
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/$IMAGE_NAME:$COMMIT_SHA']
+
+  # Deploy container image to Cloud Run (unchanged)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - '$SERVICE_NAME'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/$IMAGE_NAME:$COMMIT_SHA'
+      - '--region'
+      - '$SERVICE_REGION'
+      - '--command'
+      - 'python start.py'
+
+images:
+  - 'gcr.io/$PROJECT_ID/$IMAGE_NAME:$COMMIT_SHA'

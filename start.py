@@ -20,21 +20,6 @@ from telegram.ext import (
 
 from openai import OpenAI
 
-from flask import Flask
-import threading
-
-app = Flask(__name__)
-
-@app.route('/')
-def hello():
-    return 'OK'
-
-def run_flask():
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
-# Start Flask in a separate thread
-threading.Thread(target=run_flask).start()   
-
 client = OpenAI()
 
 SYSTEM_PROMPT = """
