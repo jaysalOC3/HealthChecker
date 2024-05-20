@@ -5,8 +5,8 @@
 """
 ConversationHandler bot to help users identify substance use triggers.
 """
-
-import logging, os
+import asyncio
+import logging
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
@@ -21,6 +21,16 @@ from telegram.ext import (
 from openai import OpenAI
 
 client = OpenAI()
+
+# Enable logging
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
+
+LISTEN, RECENT_USE, END = range(3)
 
 SYSTEM_PROMPT = """
 Your primary goal is to help users identify potential triggers for their substance use. Engage in compassionate, non-judgmental conversations to foster trust and understanding.
@@ -119,72 +129,92 @@ Important Note: I am an AI, not a mental health professional. If you're struggli
 Conversation history:
 """
 
-# Enable logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-# set higher logging level for httpx to avoid all GET and POST requests being logged
-logging.getLogger("httpx").setLevel(logging.WARNING)
-
-logger = logging.getLogger(__name__)
-
-LISTEN = 0  # State for listening
-JOURNAL = 1  # State for journaling
-SAVE = 2 
-END = ConversationHandler.END  # Define END constant
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Starts the conversation, sends initial prompt, and stores it in context."""
+    user = update.message.from_user
+    username = user.first_name if user.first_name else "User"
+
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": "Hey."}
+        {"role": "user", "content": f"Hey, my username is {username}."}
     ]
     completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=messages 
+        model="gpt-4",
+        messages=messages
     )
     llm_response = completion.choices[0].message.content
     logger.info("Start, GPT Response: %s", llm_response)
 
-    # Store the initial prompt in context
     context.user_data['messages'] = messages
 
-    await update.message.reply_text(
-        llm_response,
-        
-    )  # Add /end button
-    return LISTEN
+    await update.message.reply_text(llm_response)
+    await ask_recent_use(update, context)
+    return RECENT_USE
 
+async def yes_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    logger.info("%s responded 'Yes, continue' to recent substance use.", user.first_name)
+    messages = context.user_data.get('messages', [])
+    messages.append({"role": "user", "content": "Yes, I have used recently and I want to continue the conversation."})
+    context.user_data['messages'] = messages
+    return await listen(update, context)
+
+async def no_exit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    logger.info("%s responded 'No, exit' to recent substance use.", user.first_name)
+    await update.message.reply_text("Thank you for your response. Take care!", reply_markup=ReplyKeyboardRemove())
+    return END
 
 async def listen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Processes user input, updates conversation history, gets response from GPT-3.5, and replies."""
     user = update.message.from_user
-    logger.info("Listening: %s: %s", user.first_name, update.message.text)
+    username = user.username if user.username else "User"
+    logger.info(f"Listening: @{username}: {update.message.text}")
 
-    # Retrieve and update conversation history
     messages = context.user_data.get('messages', [])
     messages.append({"role": "user", "content": update.message.text})
+
+    logger.info(f"To GPT: {messages}")
     completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4",
         messages=messages
     )
 
     llm_response = completion.choices[0].message.content
     logger.info("GPT Response: %s", llm_response)
 
-    # Update conversation history in context
     messages.append({"role": "assistant", "content": llm_response})
     context.user_data['messages'] = messages
+    
+    await update.message.reply_text(llm_response, reply_markup=ReplyKeyboardMarkup([["/journal", "/end"]], resize_keyboard=True))
+    return LISTEN
 
-    if llm_response.lower().startswith("thank you"):
-        await update.message.reply_text(llm_response, reply_markup=ReplyKeyboardRemove())
-        return ConversationHandler.END
-    else:
-        await update.message.reply_text(llm_response,reply_markup=ReplyKeyboardMarkup([["/journal", "/end"]], resize_keyboard=True),)
-        return LISTEN
+async def ask_recent_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    logger.info("Asking %s about recent substance use.", user.first_name)
+
+    messages = context.user_data.get('messages', [])
+    t_message = "Have you used recently?"
+    messages.append({"role": "assistant", "content": t_message})
+    await update.message.reply_text(t_message, reply_markup=ReplyKeyboardMarkup([["/yes", "/no"]], resize_keyboard=True))
+    logger.info(f"Response Received: {messages}")
+    return RECENT_USE
+
+async def recent_use_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    logger.info("%s responded 'Yes' to recent substance use.", user.first_name)
+    messages = context.user_data.get('messages', [])
+    messages.append({"role": "user", "content": "Yes"})
+    context.user_data['messages'] = messages
+    return await listen(update, context)
+
+async def recent_use_no(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    logger.info("%s responded 'No' to recent substance use.", user.first_name)
+    messages = context.user_data.get('messages', [])
+    messages.append({"role": "user", "content": "No"})
+    context.user_data['messages'] = messages
+    return await listen(update, context)
 
 async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Generates a journal entry based on the conversation history."""
     user = update.message.from_user
     logger.info("%s requested a journal entry.", user.first_name)
     await update.message.reply_text("Working on your journal entry...")
@@ -193,7 +223,7 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     prompt = JOURNAL_PROMPT + "\n".join([f"{m['role']}: {m['content']}" for m in messages])
     completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
+        model="gpt-4",
         messages=[
             {"role": "system", "content": JOURNAL_PROMPT},
             {"role": "user", "content": prompt}
@@ -204,52 +234,43 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("Journal Entry: %s", journal_entry)
 
     await update.message.reply_text(journal_entry)
-    return LISTEN  # Return to LISTEN state after journaling
+    return LISTEN
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Ends the conversation."""
     user = update.message.from_user
     logger.info("User %s ended the conversation.", user.first_name)
-    await update.message.reply_text(
-        "Bye! Take care.", reply_markup=ReplyKeyboardRemove()
-    )
-    return END 
+    await update.message.reply_text("Bye! Take care.", reply_markup=ReplyKeyboardRemove())
+    return END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancels and ends the conversation."""
     user = update.message.from_user
     logger.info("User %s canceled the conversation.", user.first_name)
-    await update.message.reply_text(
-        "Bye! I hope we can talk again some day.", reply_markup=ReplyKeyboardRemove()
-    )
-
-    return ConversationHandler.END
-
+    await update.message.reply_text("Bye! I hope we can talk again some day.", reply_markup=ReplyKeyboardRemove())
+    return END
 
 def main() -> None:
-    """Run the bot."""
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token("6308464888:AAFmfSayfq9uUoH4GmLx5sFX_Ebk1C8nhSc").build()
+    application = Application.builder().token("6308464888:AAHERpabVtNcFPDLuVzUG-Oq_W2CU1-ITeA").build()
 
-    # Add conversation handler with the states LISTEN, PHOTO, LOCATION and BIO
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
+            RECENT_USE: [
+                CommandHandler("yes", recent_use_yes),
+                CommandHandler("no", recent_use_no),
+            ],
             LISTEN: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, listen),
                 CommandHandler("journal", journal),
-                CommandHandler("end", end),  # Add /end command handler
+                CommandHandler("end", end),
             ],
-            # Remove JOURNAL state (it's now handled within LISTEN)
         },
         fallbacks=[CommandHandler("cancel", cancel)],
+        allow_reentry=True,  # Add this line
     )
 
     application.add_handler(conv_handler)
 
-    # Run the bot until the user presses Ctrl-C
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
