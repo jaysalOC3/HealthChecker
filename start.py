@@ -370,7 +370,7 @@ def create_database():
     conn.close()
 
 def run_bot():
-    application = Application.builder().token("6308464888:AAHERpabVtNcFPDLuVzUG-Oq_W2CU1-ITeA").build()
+    application = Application.builder().token("6308464888:AAFM--ciTTV9AVWohAP_l9ImGRVRgwwX7P8").build()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
