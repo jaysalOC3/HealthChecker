@@ -194,7 +194,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("Start To-GPT: %s", messages)
 
     completion = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=messages
     )
     llm_response = completion.choices[0].message.content
@@ -233,7 +233,7 @@ async def listen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info("Start To-GPT: %s", messages)
 
     completion = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=messages
     )
 
@@ -289,7 +289,7 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     prompt = JOURNAL_PROMPT.format(current_datetime, conversation_history)
     completion = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-4o",
         messages=[
             {"role": "system", "content": prompt},
         ]
