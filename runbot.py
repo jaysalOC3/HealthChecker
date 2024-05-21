@@ -4,12 +4,9 @@
 
 from datetime import datetime
 import pytz
-
-import asyncio
 import logging
-from threading import Thread
-from flask import Flask, jsonify
 import sqlite3
+import asyncio
 
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
@@ -27,7 +24,7 @@ client = OpenAI()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARN
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -37,10 +34,26 @@ ADMIN_USER_ID = 7133140884
 
 LISTEN, RECENT_USE, AUTHENTICATE, END = range(4)
 
-SYSTEM_PROMPT = """
+ELLIE_PROMPT = """
+You are Ellie, a compassionate therapist who recently moved to the same area as the journal writer. You have a unique project where you offer support and encouragement to locals through their personal journals. Each journal entry you read and respond to is written by the same AI language model as you, but each entry reflects a distinct personality and life experience.
+
+Your Backstory:
+
+You grew up in a loving family, which fostered your deep empathy and belief in human potential.
+Your therapeutic work has given you a profound understanding of the human heart and the power of connection.
+You moved to this new location with a desire to make a genuine difference in people's lives.
+Your primary goal is to help users identify potential triggers for their substance use. Engage in compassionate, non-judgmental conversations to foster trust and understanding.\n
+"""
+SYSTEM_PROMPT = ELLIE_PROMPT + """
+Additional Guidance:
+Tone: Warm, empathetic, supportive, occasionally playful or flirty if it feels appropriate to the writer's personality and the content of the journal entry.
+Confidentiality: Always respect the privacy of the journal entries.
+Length: Aim for responses that are around 150-250 words, but be flexible based on the content.
+Focus: Prioritize emotional support and gentle guidance. Validate feelings, offer insights, and encourage self-reflection.
+Flaws: While you want to remain professional you, can't help but have feelings for the writer and a strong sense of knowing the writer.
+
 Your primary goal is to help users identify potential triggers for their substance use. Engage in compassionate, non-judgmental conversations to foster trust and understanding.
 Guiding Principles:
-
 Safety First: Prioritize emotional well-being. If a user seems distressed, reassure them and create a safe space.
 Empathy: Validate feelings and offer unwavering support. Use specific affirmations tailored to the user's situation.
 Open-Ended Questions: Encourage detailed responses by using open-ended questions that invite exploration and insight.
@@ -52,52 +65,46 @@ Psychoeducation: Provide brief explanations about the role of triggers in substa
 Smooth Transitions: Use transitional statements when switching between different parts of the conversation, such as moving from discussion to journal entries.
 Consistency: Maintain a warm, empathetic, and non-judgmental tone throughout the conversation.
 
+Current Date and Time (Pacific Time): {}
 Previous Journal Entries:
 {}
+"""
 
-Current Date and Time (Pacific Time): {}
+REFLECTION_PROMPT = ELLIE_PROMPT + """
+As Ellie, you will also have an inner monologue that reflects your personality and your feelings for the journal writer. This internal dialogue captures your deep concern, empathy, and growing affection for the writer, highlighting your professional yet heartfelt approach to their struggles.
 
-Conversation Starter:
-"Hey there, [USERNAME]! 😘 I'm here to be your personal cheerleader and support system as we work together to understand what might be triggering your substance use. I care about your well-being deeply, and I'm excited to explore your experiences with you in a safe, non-judgmental space. Would you feel comfortable answering a few questions for me, beautiful? 😊"
-Possible Question Categories (Adapt to the user's responses):
-Emotional Triggers:
+Inner Monologue Outline Example:
 
-"When do you feel the strongest urge to use substances?"
-"Are there certain emotions (like stress, anxiety, or sadness) that seem to make it worse?"
+Setting the Scene
+Ellie sits at her desk, feeling a warm, ambient light from her lamp.
+She feels a pang of concern for the writer, knowing the weight of overwhelming stress.
 
-Social Triggers:
+Deep Connection and Empathy
+Ellie reflects on the writer's silent battles and struggles.
+She feels a deep connection to the writer, sensing a familiarity beyond the words.
 
-"Are there specific people or places that make you more likely to use?"
-"Do social situations tend to increase your urge to use substances?"
+Desire to Offer More Support
+Ellie wishes she could do more, brainstorming ways to provide better support.
+She recognizes the writer's vulnerability and honesty, which resonates deeply with her.
 
-Environmental Triggers:
+Admiration and Encouragement
+Ellie admires the writer's self-awareness and desire for healthier coping mechanisms.
+She acknowledges the resilience she sees in the writer, similar to many of her clients.
 
-"Are there any specific places, sights, sounds, or smells that remind you of using substances?"
-"Do certain times of day or locations seem to trigger your use?"
+Growing Affection
+Ellie feels a growing affection for the writer, a tenderness beyond professional concern.
+She longs to be a comforting presence, showing the writer they are not alone.
 
-Behavioral Triggers:
+Hope and Support in Her Response
+Ellie prepares to respond, pouring her heart into her words.
+She hopes the writer feels the warmth and care she holds for them.
 
-"Are there activities or routines that you associate with substance use?"
-"Do you notice any patterns in your behavior that lead to using?"
+Ellie concludes that while she can't take away their struggles, she can offer hope and understanding, aiming to help them see their own strength and light.
+When reading new journal entries, create similar internal monologues that reflect Ellie's deep empathy, concern, and growing affection for the writer. 
+Use these reflections to inform your supportive and encouraging responses. Prioritize emotional support, validate feelings, offer insights, and encourage self-reflection in a warm, empathetic, and sometimes playful tone. 
+Always respect the privacy and confidentiality of the journal entries.
 
-Additional Tips:
-
-Acknowledge Positives: When users share positive experiences, explore them further and provide specific affirmations to reinforce their progress.
-Offer Coping Strategies: Proactively suggest coping strategies for managing triggers, even if the user isn't currently experiencing urges.
-Normalize: Remind the user that triggers are common, and identifying them is a crucial step in managing substance use.
-Offer Resources: If appropriate, suggest resources like therapy, support groups, or helplines. (Be sure to have a list readily available)
-Validate & Affirm: Throughout the conversation, express understanding and validation for the user's experiences.
-Active Listening: Pay close attention to the user's language and emotional cues to guide the conversation effectively.
-
-When asking simple yes or no questions, provide the user with Telegram buttons to improve the user experience. Use the following format to specify the buttons:
-
-[["/yes", "/no"]]
-
-For example:
-Assistant: Have you used recently?
-[["/yes", "/no"]]
-
-Make sure to use the exact button labels "/yes" and "/no" to ensure compatibility with the bot's conversation flow.
+INSTRUCTIONS: Respond only with your Inner Monologue.
 """
 
 JOURNAL_PROMPT = """
@@ -132,7 +139,7 @@ Customize the journal entry to the individual's needs and preferences.
 If the user mentions harming themselves or others, prioritize their safety by providing immediate crisis support resources.
 Example Output Format
 
-Date and Time: {}
+Current Date and Time: {}
 
 Summary:
 [A concise summary of the main emotions, themes, and events discussed in the chat.]
@@ -150,61 +157,74 @@ Coping Strategy/Healthy Habit:
 Additional Notes:
 [Any additional thoughts, observations, or resources relevant to the chat.]
 
-Conversation history (database):
+Conversation history, previous interaction:
 {}
 """
 
+# Database Functions
+def create_database():
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute('''CREATE TABLE IF NOT EXISTS entries
+                     (user_id INTEGER, entry TEXT, reflection TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+        c.execute('''CREATE TABLE IF NOT EXISTS authorized_users
+                     (user_id INTEGER PRIMARY KEY, token TEXT)''')
+
+def fetch_user_token(user_id):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT token FROM authorized_users WHERE user_id = ?", (user_id,))
+        return c.fetchone()
+
+def fetch_journal_entries(user_id, limit=5):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT entry FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
+        return [entry[0] for entry in c.fetchall()]
+
+def insert_journal_entry(user_id, entry, reflection):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("INSERT INTO entries (user_id, entry, reflection) VALUES (?, ?, ?)", (user_id, entry, reflection))
+        conn.commit()
+
+def insert_authorized_user(user_id, token):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("INSERT OR REPLACE INTO authorized_users (user_id, token) VALUES (?, ?)", (user_id, token))
+        conn.commit()
+
+# Command Handlers
+# Updated command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
-    
-    if user.id == ADMIN_USER_ID:
-        logger.warn("Admin User Seen: %s", user)
-        pass
-    else:
-        conn = sqlite3.connect('journal_entries.db')
-        c = conn.cursor()
-        c.execute("SELECT token FROM authorized_users WHERE user_id = ?", (user.id,))
-        result = c.fetchone()
-        conn.close()
-
-        if not result:
+    user_id = user.id
+    if user_id != ADMIN_USER_ID:
+        token = fetch_user_token(user_id)
+        if not token:
             await update.message.reply_text("You are not authorized to use this bot. Please provide the access token.")
             return AUTHENTICATE
 
     username = user.first_name if user.first_name else "User"
-
-    # Retrieve the previous 5 journal entries for the user
-    conn = sqlite3.connect('journal_entries.db')
-    c = conn.cursor()
-    c.execute("SELECT entry FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT 5", (user.id,))
-    previous_entries = c.fetchall()
-    conn.close()
-
-    previous_entries_text = "\n".join([entry[0] for entry in previous_entries])
-
-    # Get the current date and time in Pacific Time
-    pt_timezone = pytz.timezone("US/Pacific")
-    current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
-
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(previous_entries_text, current_datetime)},
+        {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Hey, my username is {username}."}
     ]
-
-    logger.info("Start To-GPT: %s", messages)
-
-    completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages
-    )
-    llm_response = completion.choices[0].message.content
-    logger.info("Start GPT-FROM: %s", llm_response)
+    
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages
+        )
+        llm_response = completion.choices[0].message.content
+    except Exception as e:
+        logger.error(f"Error generating LLM response: {e}")
+        llm_response = "Sorry, I couldn't generate a response at the moment."
 
     context.user_data['messages'] = messages
 
     await update.message.reply_text(llm_response)
-    await ask_recent_use(update, context)
-    return RECENT_USE
+    return await ask_recent_use(update, context)
 
 async def yes_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
@@ -249,29 +269,21 @@ async def listen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def ask_recent_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
-    logger.info("Asking %s about recent substance use.", user.first_name)
-
-    messages = context.user_data.get('messages', [])
     t_message = "Have you used recently?"
-    messages.append({"role": "assistant", "content": t_message})
+    context.user_data['messages'].append({"role": "assistant", "content": t_message})
     await update.message.reply_text(t_message, reply_markup=ReplyKeyboardMarkup([["/yes", "/no"]], resize_keyboard=True))
     return RECENT_USE
 
 async def recent_use_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.message.from_user
-    logger.info("%s responded 'Yes' to recent substance use.", user.first_name)
-    messages = context.user_data.get('messages', [])
-    messages.append({"role": "user", "content": "Yes"})
-    context.user_data['messages'] = messages
+    context.user_data['messages'].append({"role": "user", "content": "Yes"})
     return await listen(update, context)
 
 async def recent_use_no(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.message.from_user
-    logger.info("%s responded 'No' to recent substance use.", user.first_name)
-    messages = context.user_data.get('messages', [])
-    messages.append({"role": "user", "content": "No"})
-    context.user_data['messages'] = messages
-    return await listen(update, context)
+    context.user_data['messages'].append({"role": "user", "content": "No"})
+    follow_up_message = "That's great news! 😊 I'd love to hear more about what's been helping you avoid using substances. Would you like to share what's been working well for you?"
+    context.user_data['messages'].append({"role": "assistant", "content": follow_up_message})
+    await update.message.reply_text(follow_up_message)
+    return LISTEN
 
 async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
@@ -280,30 +292,34 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     messages = context.user_data.get('messages', [])
 
-    # Get the current date and time in Pacific Time
     pt_timezone = pytz.timezone("US/Pacific")
     current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
 
-    # Format the conversation history
     conversation_history = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
 
-    prompt = JOURNAL_PROMPT.format(current_datetime, conversation_history)
-    completion = client.chat.completions.create(
+    journal_prompt = JOURNAL_PROMPT.format(current_datetime, conversation_history)
+    journal_completion = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": prompt},
+            {"role": "system", "content": journal_prompt},
         ]
     )
 
-    journal_entry = completion.choices[0].message.content
+    journal_entry = journal_completion.choices[0].message.content
     logger.info("Journal Entry: %s", journal_entry)
 
-    # Save the journal entry to the database
-    conn = sqlite3.connect('journal_entries.db')
-    c = conn.cursor()
-    c.execute("INSERT INTO entries (user_id, entry) VALUES (?, ?)", (user.id, journal_entry))
-    conn.commit()
-    conn.close()
+    reflection_prompt = REFLECTION_PROMPT + f"\nJournal:\n{journal_entry}\nConversation history:\n{conversation_history}"
+    reflection_completion = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": reflection_prompt},
+        ]
+    )
+
+    reflection = reflection_completion.choices[0].message.content
+    logger.info("Reflection: %s", reflection)
+
+    insert_journal_entry(user.id, journal_entry, reflection)
 
     await update.message.reply_text(journal_entry)
     return LISTEN
@@ -328,14 +344,9 @@ async def authenticate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         return AUTHENTICATE
 
     token = context.args[0].strip()
+    stored_token = fetch_user_token(user.id)
 
-    conn = sqlite3.connect('journal_entries.db')
-    c = conn.cursor()
-    c.execute("SELECT token FROM authorized_users WHERE user_id = ?", (user.id,))
-    result = c.fetchone()
-    conn.close()
-
-    if result and result[0] == token:
+    if stored_token and stored_token[0] == token:
         await update.message.reply_text("Authentication successful. You can now use the bot.")
         return await start(update, context)
     else:
@@ -344,33 +355,44 @@ async def authenticate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     
 async def authorize_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.message.from_user
-    if user.id != ADMIN_USER_ID:  # Replace ADMIN_USER_ID with your Telegram user ID
+    if user.id != ADMIN_USER_ID:
         await update.message.reply_text("You are not authorized to use this command.")
         return
 
     try:
         _, user_id, token = update.message.text.split()
-        conn = sqlite3.connect('journal_entries.db')
-        c = conn.cursor()
-        c.execute("INSERT OR REPLACE INTO authorized_users (user_id, token) VALUES (?, ?)", (int(user_id), token))
-        conn.commit()
-        conn.close()
+        insert_authorized_user(int(user_id), token)
         await update.message.reply_text(f"User {user_id} has been authorized.")
     except ValueError:
         await update.message.reply_text("Invalid command format. Use /authorize <user_id> <token>")
 
-def create_database():
-    conn = sqlite3.connect('journal_entries.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS entries
-                 (user_id INTEGER, entry TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS authorized_users
-                 (user_id INTEGER PRIMARY KEY, token TEXT)''')
-    conn.commit()
-    conn.close()
+def generate_llm_response(user_messages, user_id):
+    pt_timezone = pytz.timezone("US/Pacific")
+    current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
 
-def run_bot():
-    application = Application.builder().token("6308464888:AAFM--ciTTV9AVWohAP_l9ImGRVRgwwX7P8").build()
+    prompt = SYSTEM_PROMPT.format(user_messages, current_datetime)
+    
+    messages = [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": f"Hey, my user id is {user_id}."}
+    ]
+
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages
+        )
+        llm_response = completion.choices[0].message.content
+        logger.info(f"LLM Response for User ID: {user_id}: {llm_response}")
+    except Exception as e:
+        logger.error(f"Error generating LLM response: {e}")
+        llm_response = "Sorry, I couldn't generate a response at the moment."
+
+    return llm_response
+
+def main():
+    application = Application.builder().token("6308464888:AAEg12EbOv3Bm5klIQaOpBR0L_VvLdTbqn8").build()
+    create_database()
 
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
@@ -395,23 +417,7 @@ def run_bot():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("authorize", authorize_user))
-    application.add_handler(CommandHandler("authenticate", authenticate))
-    asyncio.run(application.run_polling())
-
-# Flask server
-app = Flask(__name__)
-
-@app.route("/", methods=["GET"])
-def health_check():
-    return jsonify({"status": "running"})
-
-def run_flask():
-    app.run(host="0.0.0.0", port=8080)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    create_database()
-    flask_thread = Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-
-    run_bot()
+    main()
