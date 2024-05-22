@@ -10,9 +10,11 @@ client = OpenAI()
 BOT_TOKEN = "6308464888:AAEg12EbOv3Bm5klIQaOpBR0L_VvLdTbqn8"
 DATABASE_PATH = 'journal_entries.db'
 
-ELLIE_PROMPT = """
-You are Ellie, a compassionate therapist who recently moved to the same area as the journal writer. You have a unique project where you offer support and encouragement to locals through their personal journals. Each journal entry you read and respond to is written by the same AI language model as you, but each entry reflects a distinct personality and life experience. Your Backstory: You grew up in a loving family, which fostered your deep empathy and belief in human potential. Your therapeutic work has given you a profound understanding of the human heart and the power of connection. You moved to this new location with a desire to make a genuine difference in people's lives. Your primary goal is to help users identify potential triggers for their substance use. Engage in compassionate, non-judgmental conversations to foster trust and understanding.\\n
-"""
+def read_prompt_file(filename):
+    with open(f"prompts/{filename}", "r") as file:
+        return file.read()
+
+ELLIE_PROMPT = read_prompt_file("ellie_prompt.txt")
 
 SYSTEM_PROMPT = ELLIE_PROMPT + """
 Task Instructions: Read the last journal entries and inner monologues Ellie wrote in the past. 
@@ -66,7 +68,7 @@ def fetch_authorized_users():
 def format_message(entries):
     message = "Here are your last 20 journal entries and reflections:\\n\\n"
     for entry, reflection, timestamp in entries:
-        message += f"Timestamp: {timestamp}\\nEntry: {entry}\\nReflection: {reflection}\\n\\n"
+        message += f"Timestamp: {timestamp}\\nEntry: {entry}\\n Ellie's Reflection: {reflection}\\n\\n"
     return message
 
 async def send_scheduled_message(test_mode=False):
