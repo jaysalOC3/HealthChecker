@@ -208,6 +208,8 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     journal_entry = journal_completion.choices[0].message.content
     logger.info("Journal Entry: %s", journal_entry)
 
+    await update.message.reply_text("Working on my thoughts...")
+
     reflection_prompt = REFLECTION_PROMPT + f"\nEllie's Journal:\n{journal_entry}\nConversation history:\n{conversation_history}"
     reflection_completion = client.chat.completions.create(
         model="gpt-4o",
