@@ -4,6 +4,7 @@
 
 from datetime import datetime
 import pytz
+
 import logging
 import sqlite3
 import asyncio
@@ -24,7 +25,7 @@ client = OpenAI()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -88,8 +89,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             return AUTHENTICATE
 
     username = user.first_name if user.first_name else "User"
+    
+    logger.info(user_id)
+    journal_entries = fetch_journal_entries(user_id, 5)
+    logger.info(journal_entries)
+    formatted_journal_entries = "\n".join(journal_entries)
+
+    pt_timezone = pytz.timezone("US/Pacific")
+    current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
+
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": SYSTEM_PROMPT.format(current_datetime,formatted_journal_entries)},
         {"role": "user", "content": f"Hey, my username is {username}."}
     ]
     
