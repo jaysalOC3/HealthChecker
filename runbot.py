@@ -23,6 +23,14 @@ from openai import OpenAI
 
 client = OpenAI()
 
+import os
+from dotenv import load_dotenv
+load_dotenv()
+# Get the OpenAPI key from the environment variable
+openapi_key = os.getenv("OPENAI_API_KEY")
+
+client.api_key = openapi_key
+
 # Enable logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING
@@ -85,7 +93,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if user_id != ADMIN_USER_ID:
         token = fetch_user_token(user_id)
         if not token:
-            await update.message.reply_text("You are not authorized to use this bot. Please provide the access token.")
+            await update.message.reply_text("You are not authorized to use this bot. Please provide the access token.", parse_mode='Markdown')
             return AUTHENTICATE
 
     username = user.first_name if user.first_name else "User"
@@ -115,7 +123,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     context.user_data['messages'] = messages
 
-    await update.message.reply_text(llm_response)
+    await update.message.reply_text(llm_response, parse_mode='Markdown')
     return await ask_recent_use(update, context)
 
 async def yes_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -200,7 +208,7 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     journal_entry = journal_completion.choices[0].message.content
     logger.info("Journal Entry: %s", journal_entry)
 
-    reflection_prompt = REFLECTION_PROMPT + f"\nJournal:\n{journal_entry}\nConversation history:\n{conversation_history}"
+    reflection_prompt = REFLECTION_PROMPT + f"\nEllie's Journal:\n{journal_entry}\nConversation history:\n{conversation_history}"
     reflection_completion = client.chat.completions.create(
         model="gpt-4o",
         messages=[
@@ -213,7 +221,7 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     insert_journal_entry(user.id, journal_entry, reflection)
 
-    await update.message.reply_text(journal_entry)
+    await update.message.reply_text(journal_entry, parse_mode='Markdown')
     return LISTEN
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
