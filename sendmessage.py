@@ -2,17 +2,29 @@ import sqlite3
 import asyncio
 import datetime
 from telegram import Bot
-from openai import OpenAI
 import argparse
 
-client = OpenAI()
 import os
 from dotenv import load_dotenv
 load_dotenv()
-# Get the OpenAPI key from the environment variable
-openapi_key = os.getenv("OPENAI_API_KEY")
 
-client.api_key = openapi_key
+import google.generativeai as genai
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+
+# Create the model
+# See https://ai.google.dev/api/python/google/generativeai/GenerativeModel
+generation_config = {
+  "temperature": 1,
+  "top_p": 0.95,
+  "top_k": 64,
+  "max_output_tokens": 8192,
+  "response_mime_type": "text/plain",
+}
+
+model = genai.GenerativeModel(
+  model_name="gemini-1.5-pro-latest",
+  generation_config=generation_config,
+)
 
 # Replace 'YOUR_BOT_TOKEN' with your actual bot token
 BOT_TOKEN = "6308464888:AAEg12EbOv3Bm5klIQaOpBR0L_VvLdTbqn8"
@@ -59,15 +71,16 @@ schedule = {
 
 async def send_message(user_id, message):
     journal_prompt = SYSTEM_PROMPT.format(message)
-    message_completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": journal_prompt},
+    
+    chat_session = model.start_chat(
+        history=[
         ]
     )
-    print(message_completion.choices[0].message.content)
+
+    response = chat_session.send_message(journal_prompt)
+    print(response.text)
     bot = Bot(token=BOT_TOKEN)
-    await bot.send_message(chat_id=user_id, text=message_completion.choices[0].message.content, parse_mode='Markdown')
+    await bot.send_message(chat_id=user_id, text=response.text, parse_mode='Markdown')
 
 def fetch_last_entries(user_id, limit=20):
     with sqlite3.connect(DATABASE_PATH) as conn:
