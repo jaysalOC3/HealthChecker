@@ -5,12 +5,16 @@ from telegram import Bot
 from openai import OpenAI
 import argparse
 
+import tempfile
+import requests
+
 client = OpenAI()
 import os
 from dotenv import load_dotenv
 load_dotenv()
 # Get the OpenAPI key from the environment variable
 openapi_key = os.getenv("OPENAI_API_KEY")
+elevenlabs_key = os.getenv("xi-api-key")
 
 client.api_key = openapi_key
 
@@ -65,9 +69,40 @@ async def send_message(user_id, message):
             {"role": "system", "content": journal_prompt},
         ]
     )
-    print(message_completion.choices[0].message.content)
+    response_text = message_completion.choices[0].message.content
+    print(response_text)
+
     bot = Bot(token=BOT_TOKEN)
-    await bot.send_message(chat_id=user_id, text=message_completion.choices[0].message.content, parse_mode='Markdown')
+    await bot.send_message(chat_id=user_id, text=response_text, parse_mode='Markdown')
+
+    # Generate audio using ElevenLabs API
+    audio_url = "https://api.elevenlabs.io/v1/text-to-speech/piTKgcLEGmPE4e6mEKli"
+    headers = {
+        "Accept": "audio/mpeg",
+        "Content-Type": "application/json",
+        "xi-api-key": elevenlabs_key
+    }
+    data = {
+        "text": response_text,
+        "model_id": "eleven_turbo_v2",
+        
+    }
+    response = requests.post(audio_url, json=data, headers=headers)
+
+    # Check if the API request was successful
+    if response.status_code == 200:
+        # Save the audio file to a temporary location
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as audio_file:
+            audio_file.write(response.content)
+            audio_file_path = audio_file.name
+
+        await bot.send_audio(chat_id=user_id, audio=open(audio_file_path, 'rb'), caption="Audio transcript", parse_mode='Markdown')
+
+        # Remove the temporary audio file
+        os.unlink(audio_file_path)
+    else:
+        print(f"Failed to generate audio. Status code: {response.status_code}")
+        print(response.text)
 
 def fetch_last_entries(user_id, limit=20):
     with sqlite3.connect(DATABASE_PATH) as conn:
