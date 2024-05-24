@@ -46,6 +46,38 @@ GENERATION_CONFIG = {
 
 safety_settings = [
   {
+    "category": "HARM_CATEGORY_UNSPECIFIED",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_DEROGATORY",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_TOXICITY",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_VIOLENCE",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_SEXUAL",
+    "threshold": "BLOCK_NONE",
+  },
+  {
+    "category": "HARM_CATEGORY_MEDICAL",
+    "threshold": "BLOCK_NONE",
+  },
+  {
+    "category": "HARM_CATEGORY_DANGEROUS",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
     "category": "HARM_CATEGORY_HARASSMENT",
     "threshold": "BLOCK_MEDIUM_AND_ABOVE",
   },
@@ -59,7 +91,7 @@ safety_settings = [
   },
   {
     "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-    "threshold": "BLOCK_NONE",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
   },
 ]
 
