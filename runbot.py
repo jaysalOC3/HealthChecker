@@ -46,52 +46,8 @@ GENERATION_CONFIG = {
 
 safety_settings = [
   {
-    "category": "HARM_CATEGORY_UNSPECIFIED",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_DEROGATORY",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_TOXICITY",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_VIOLENCE",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
     "category": "HARM_CATEGORY_SEXUAL",
     "threshold": "BLOCK_NONE",
-  },
-  {
-    "category": "HARM_CATEGORY_MEDICAL",
-    "threshold": "BLOCK_NONE",
-  },
-  {
-    "category": "HARM_CATEGORY_DANGEROUS",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_HARASSMENT",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_HATE_SPEECH",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-  },
-  {
-    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-    "threshold": "BLOCK_NONE",
-  },
-  {
-    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
   },
 ]
 
@@ -196,7 +152,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data['messages'].append(llm_response.text) 
 
     await update.message.reply_text(llm_response.text)
-    return await ask_recent_use(update, context)
+
+    return LISTEN
 
 
 async def yes_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
