@@ -2,13 +2,12 @@
 # pylint: disable=unused-argument
 # This program is dedicated to the public domain under the CC0 license.
 
-from datetime import datetime
-import pytz
-
 import logging
 import sqlite3
 import asyncio
+from datetime import datetime
 
+import pytz
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
 from telegram.ext import (
     Application,
@@ -19,38 +18,46 @@ from telegram.ext import (
     filters,
 )
 
-from openai import OpenAI
-
-client = OpenAI()
-
 import os
 from dotenv import load_dotenv
-load_dotenv()
-# Get the OpenAPI key from the environment variable
-openapi_key = os.getenv("OPENAI_API_KEY")
 
-client.api_key = openapi_key
+import google.generativeai as genai
+
+load_dotenv()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 
-ADMIN_USER_ID = 7133140884
+genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
+# Model Configuration (using global variables)
+MODEL_NAME = "gemini-1.5-pro-latest"
+GENERATION_CONFIG = {
+    "temperature": 1,
+    "top_p": 0.95,
+    "top_k": 64,
+    "max_output_tokens": 8192,  
+}
+
+# Constants
+ADMIN_USER_ID = 7133140884
 LISTEN, RECENT_USE, AUTHENTICATE, END = range(4)
 
-def read_prompt_file(filename):
+# Load Prompts (using a function)
+def read_prompt(filename):
     with open(f"prompts/{filename}", "r") as file:
         return file.read()
 
-ELLIE_PROMPT = read_prompt_file("ellie_prompt.txt")
-SYSTEM_PROMPT = read_prompt_file("system_prompt.txt")
-REFLECTION_PROMPT = read_prompt_file("reflection_prompt.txt")
-JOURNAL_PROMPT = read_prompt_file("journal_prompt.txt")
+
+ELLIE_PROMPT = read_prompt("ellie_prompt.txt")
+SYSTEM_PROMPT = read_prompt("system_prompt.txt")
+REFLECTION_PROMPT = read_prompt("reflection_prompt.txt")
+JOURNAL_PROMPT = read_prompt("journal_prompt.txt")
 
 # Database Functions
 def create_database():
@@ -86,51 +93,66 @@ def insert_authorized_user(user_id, token):
         conn.commit()
 
 # Command Handlers
-# Updated command handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     user_id = user.id
+
+    # Initialize 'messages' list here
+    context.user_data['messages'] = []
+
+    # Authentication Check
     if user_id != ADMIN_USER_ID:
         token = fetch_user_token(user_id)
         if not token:
-            await update.message.reply_text("You are not authorized to use this bot. Please provide the access token.", parse_mode='Markdown')
+            await update.message.reply_text(
+                "You are not authorized. Provide the access token."
+            )
             return AUTHENTICATE
 
     username = user.first_name if user.first_name else "User"
-    
-    logger.info(user_id)
+    logger.info(f"User started conversation: {user_id}")
+
+    # Fetch and Format Journal Entries
     journal_entries = fetch_journal_entries(user_id, 5)
-    logger.info(journal_entries)
     formatted_journal_entries = "\n".join(journal_entries)
 
+    # Get Current Time
     pt_timezone = pytz.timezone("US/Pacific")
     current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT.format(current_datetime,formatted_journal_entries)},
-        {"role": "user", "content": f"Hey, my username is {username}."}
-    ]
+    # Prepare System Prompt
+    system_prompt = ELLIE_PROMPT + SYSTEM_PROMPT.format(
+        current_datetime, formatted_journal_entries
+    )
+
+    logger.info(f"SYSTEM_PROMPT: {system_prompt}")
+
+    # Add SYSTEM_PROMPT to User Messages Context
+    context.user_data['messages'].append(system_prompt)
+
+    # Start Chat Session
+    context.user_data['chat_session'] = genai.GenerativeModel(
+        model_name=MODEL_NAME, generation_config=GENERATION_CONFIG
+    ).start_chat()
+    context.user_data['chat_session'].send_message(system_prompt)
+
+    user_prompt = f"New Message from: {username}. Hi."
+    context.user_data['messages'].append(user_prompt)
+    context.user_data['chat_session'].send_message(user_prompt)
     
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages
-        )
-        llm_response = completion.choices[0].message.content
-    except Exception as e:
-        logger.error(f"Error generating LLM response: {e}")
-        llm_response = "Sorry, I couldn't generate a response at the moment."
+    llm_response = context.user_data['chat_session'].last
+    logger.info(f'llm_response: {llm_response.text}')    
+    context.user_data['messages'].append(llm_response.text) 
 
-    context.user_data['messages'] = messages
-
-    await update.message.reply_text(llm_response, parse_mode='Markdown')
+    await update.message.reply_text(llm_response.text)
     return await ask_recent_use(update, context)
+
 
 async def yes_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("%s responded 'Yes' to the question.", user.first_name)
     messages = context.user_data.get('messages', [])
-    messages.append({"role": "user", "content": "Yes"})
+    messages.append("Yes")
     context.user_data['messages'] = messages
     return await listen(update, context)
 
@@ -138,50 +160,59 @@ async def no_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     user = update.message.from_user
     logger.info("%s responded 'No' to the question.", user.first_name)
     messages = context.user_data.get('messages', [])
-    messages.append({"role": "user", "content": "No"})
+    messages.append("No")
     context.user_data['messages'] = messages
     return await listen(update, context)
 
 async def listen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     username = user.username if user.username else "User"
-    logger.info(f"Listening: @{username}: {update.message.text}")
+    user_message = update.message.text  # Get user message directly
+    logger.info(f"Listening: @{user.username}: {user_message}")
 
-    messages = context.user_data.get('messages', [])
-    messages.append({"role": "user", "content": update.message.text})
+    try:
+        uuser_message = update.message.text
+        context.user_data['messages'].append(user_message)
 
-    logger.info("Start To-GPT: %s", messages)
+        # Get the LLM response (extract text only)
+        llm_response = context.user_data['chat_session'].send_message(user_message).text
+        #logger.info("LLM Response: %s", llm_response)
+        context.user_data['messages'].append(llm_response)
 
-    completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages
+    except Exception as e:
+        logger.error(f"Error generating LLM response: {e}")
+        return LISTEN  # Stay in the LISTEN state for error recovery
+
+    context.user_data['messages'].append(llm_response) # Add LLM response to messages list
+
+    await update.message.reply_text(
+        llm_response, reply_markup=ReplyKeyboardMarkup([["/journal", "/end"]], resize_keyboard=True)
     )
 
-    llm_response = completion.choices[0].message.content
+    logger.info(f"-------------------------Chat Session:")
+    for msg in context.user_data['messages']:
+        logger.info(msg)
 
-    logger.info("Start GPT-FROM: %s", llm_response)
-
-    messages.append({"role": "assistant", "content": llm_response})
-    context.user_data['messages'] = messages
-    
-    await update.message.reply_text(llm_response, reply_markup=ReplyKeyboardMarkup([["/journal", "/end"]], resize_keyboard=True))
     return LISTEN
 
 async def ask_recent_use(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     t_message = "Have you used recently?"
-    context.user_data['messages'].append({"role": "assistant", "content": t_message})
+    context.user_data['messages'].append(t_message)
+    context.user_data['chat_session'].send_message(t_message)
     await update.message.reply_text(t_message, reply_markup=ReplyKeyboardMarkup([["/yes", "/no"]], resize_keyboard=True))
     return RECENT_USE
 
 async def recent_use_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['messages'].append({"role": "user", "content": "Yes"})
+    context.user_data['messages'].append("Yes")
+    context.user_data['chat_session'].send_message("Yes")
     return await listen(update, context)
 
 async def recent_use_no(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data['messages'].append({"role": "user", "content": "No"})
+    context.user_data['messages'].append("No")
     follow_up_message = "That's great news! 😊 I'd love to hear more about what's been helping you avoid using substances. Would you like to share what's been working well for you?"
-    context.user_data['messages'].append({"role": "assistant", "content": follow_up_message})
+    context.user_data['messages'].append(follow_up_message)
+    context.user_data['chat_session'].send_message(follow_up_message)
     await update.message.reply_text(follow_up_message)
     return LISTEN
 
@@ -195,35 +226,54 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     pt_timezone = pytz.timezone("US/Pacific")
     current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
 
-    conversation_history = "\n".join([f"{m['role']}: {m['content']}" for m in messages])
+    conversation_history = "\n".join([
+        f"{m.text}" if hasattr(m, 'text') else f"{m}"  # Handle strings and message objects
+        for m in messages
+    ])
 
-    journal_prompt = JOURNAL_PROMPT.format(current_datetime, conversation_history)
-    journal_completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": journal_prompt},
-        ]
-    )
+    journal_prompt = ELLIE_PROMPT + JOURNAL_PROMPT.format(current_datetime, conversation_history)
 
-    journal_entry = journal_completion.choices[0].message.content
-    logger.info("Journal Entry: %s", journal_entry)
-
+    # Send the journal_prompt to Google AI and store in journal_entry
+    journal_entry = genai.generate_text(prompt=journal_prompt, **GENERATION_CONFIG).result
+    print(journal_entry)
+    
     await update.message.reply_text("Working on my thoughts...")
 
-    reflection_prompt = REFLECTION_PROMPT + f"\nEllie's Journal:\n{journal_entry}\nConversation history:\n{conversation_history}"
-    reflection_completion = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": reflection_prompt},
-        ]
-    )
+    reflection_prompt = ELLIE_PROMPT + REFLECTION_PROMPT + f"\n\n### START Chat Transcripts:\n{conversation_history}### END Chat Transcripts:"
 
-    reflection = reflection_completion.choices[0].message.content
-    logger.info("Reflection: %s", reflection)
+    # Send the reflection_prompt to Google AI and store in reflection
+    reflection = genai.generate_text(prompt=reflection_prompt, **GENERATION_CONFIG).result
+    logger.info("---------Reflection: %s", reflection)
 
     insert_journal_entry(user.id, journal_entry, reflection)
 
-    await update.message.reply_text(journal_entry, parse_mode='Markdown')
+    await update.message.reply_text(journal_entry)
+    return LISTEN
+
+async def get_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    user_id = user.id
+
+    # Authentication Check
+    if user_id != ADMIN_USER_ID:
+        token = fetch_user_token(user_id)
+        if not token:
+            await update.message.reply_text(
+                "You are not authorized. Provide the access token."
+            )
+            return AUTHENTICATE
+        
+    messages = context.user_data.get('messages', [])
+
+    pt_timezone = pytz.timezone("US/Pacific")
+    current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
+
+    conversation_history = "\n".join([
+        f"{m.text}" if hasattr(m, 'text') else f"{m}"  # Handle strings and message objects
+        for m in messages
+    ])
+    
+    await update.message.reply_text(conversation_history[:200], parse_mode='Markdown')
     return LISTEN
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -268,30 +318,6 @@ async def authorize_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError:
         await update.message.reply_text("Invalid command format. Use /authorize <user_id> <token>")
 
-def generate_llm_response(user_messages, user_id):
-    pt_timezone = pytz.timezone("US/Pacific")
-    current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
-
-    prompt = SYSTEM_PROMPT.format(user_messages, current_datetime)
-    
-    messages = [
-        {"role": "system", "content": prompt},
-        {"role": "user", "content": f"Hey, my user id is {user_id}."}
-    ]
-
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages
-        )
-        llm_response = completion.choices[0].message.content
-        logger.info(f"LLM Response for User ID: {user_id}: {llm_response}")
-    except Exception as e:
-        logger.error(f"Error generating LLM response: {e}")
-        llm_response = "Sorry, I couldn't generate a response at the moment."
-
-    return llm_response
-
 def main():
     application = Application.builder().token("6308464888:AAEg12EbOv3Bm5klIQaOpBR0L_VvLdTbqn8").build()
     create_database()
@@ -319,6 +345,7 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("authorize", authorize_user))
+    application.add_handler(CommandHandler("get_context", get_context))
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
