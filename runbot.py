@@ -44,6 +44,25 @@ GENERATION_CONFIG = {
     "max_output_tokens": 8192,  
 }
 
+safety_settings = [
+  {
+    "category": "HARM_CATEGORY_HARASSMENT",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_HATE_SPEECH",
+    "threshold": "BLOCK_MEDIUM_AND_ABOVE",
+  },
+  {
+    "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    "threshold": "BLOCK_NONE",
+  },
+  {
+    "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+    "threshold": "BLOCK_NONE",
+  },
+]
+
 # Constants
 ADMIN_USER_ID = 7133140884
 LISTEN, RECENT_USE, AUTHENTICATE, END = range(4)
@@ -132,7 +151,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     # Start Chat Session
     context.user_data['chat_session'] = genai.GenerativeModel(
-        model_name=MODEL_NAME, generation_config=GENERATION_CONFIG
+        model_name=MODEL_NAME, generation_config=GENERATION_CONFIG, safety_settings=safety_settings
     ).start_chat()
     context.user_data['chat_session'].send_message(system_prompt)
 
@@ -234,7 +253,7 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     journal_prompt = ELLIE_PROMPT + JOURNAL_PROMPT.format(current_datetime, conversation_history)
 
     # Send the journal_prompt to Google AI and store in journal_entry
-    journal_entry = genai.generate_text(prompt=journal_prompt, **GENERATION_CONFIG).result
+    journal_entry = genai.generate_text(prompt=journal_prompt, **GENERATION_CONFIG, safety_settings=safety_settings).result
     print(journal_entry)
     
     await update.message.reply_text("Working on my thoughts...")
@@ -242,7 +261,7 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     reflection_prompt = ELLIE_PROMPT + REFLECTION_PROMPT + f"\n\n### START Chat Transcripts:\n{conversation_history}### END Chat Transcripts:"
 
     # Send the reflection_prompt to Google AI and store in reflection
-    reflection = genai.generate_text(prompt=reflection_prompt, **GENERATION_CONFIG).result
+    reflection = genai.generate_text(prompt=reflection_prompt, **GENERATION_CONFIG, safety_settings=safety_settings).result
     logger.info("---------Reflection: %s", reflection)
 
     insert_journal_entry(user.id, journal_entry, reflection)
