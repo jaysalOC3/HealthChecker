@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
 
 # Model Configuration (using global variables)
-MODEL_NAME = "gemini-1.5-pro-latest"
+MODEL_NAME = "gemini-1.5-flash-latest"
 GENERATION_CONFIG = {
     "temperature": 1,
     "top_p": 0.95,
@@ -53,7 +53,7 @@ safety_settings = [
 
 # Constants
 ADMIN_USER_ID = 7133140884
-LISTEN, RECENT_USE, AUTHENTICATE, END = range(4)
+AUTHENTICATE, RECENT_USE, LISTEN, END = range(4)
 
 # Load Prompts (using a function)
 def read_prompt(filename):
@@ -62,7 +62,8 @@ def read_prompt(filename):
 
 
 ELLIE_PROMPT = read_prompt("ellie_prompt.txt")
-SYSTEM_PROMPT = read_prompt("system_prompt.txt")
+FEEDBACK_PROMPT = read_prompt("feedback_prompt.txt")
+START_PROMPT = read_prompt("start_prompt.txt")
 REFLECTION_PROMPT = read_prompt("reflection_prompt.txt")
 JOURNAL_PROMPT = read_prompt("journal_prompt.txt")
 
@@ -81,12 +82,18 @@ def fetch_user_token(user_id):
         c.execute("SELECT token FROM authorized_users WHERE user_id = ?", (user_id,))
         return c.fetchone()
 
-def fetch_journal_entries(user_id, limit=5):
+def fetch_journal_entries(user_id, limit=1):
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
         c.execute("SELECT entry FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
         return [entry[0] for entry in c.fetchall()]
 
+def fetch_reflection_entries(user_id, limit=1):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT reflection FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
+        return [entry[0] for entry in c.fetchall()]
+    
 def insert_journal_entry(user_id, entry, reflection):
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
@@ -98,6 +105,25 @@ def insert_authorized_user(user_id, token):
         c = conn.cursor()
         c.execute("INSERT OR REPLACE INTO authorized_users (user_id, token) VALUES (?, ?)", (user_id, token))
         conn.commit()
+
+def generate_start_prompt():
+    llminput = FEEDBACK_PROMPT
+    reflectioninput = fetch_reflection_entries(ADMIN_USER_ID)
+    llminput += "ORIGINAL SYSTEM PROMPT:\n" +  ELLIE_PROMPT + "=== END ORIGINAL SYSTEM PROMPT ===\n\n"
+    llminput += "CONVERSATION FEEDBACK:\n"
+    for item in reflectioninput:
+        llminput += f"\n{item}\n"
+    llminput += "=== END FEEDBACK ===\n"
+    
+    logger.info(f"INPUT: {llminput}")
+    new_system_prompt = genai.GenerativeModel(
+                                            model_name=MODEL_NAME ,
+                                            generation_config=GENERATION_CONFIG,
+                                            safety_settings=safety_settings,
+                                            system_instruction=llminput,
+                                ).start_chat().send_message("\n").text
+    logger.info(f"NEW SYSTEM PROMPT: {new_system_prompt}")
+    return new_system_prompt
 
 # Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -118,40 +144,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     username = user.first_name if user.first_name else "User"
     logger.info(f"User started conversation: {user_id}")
-
-    # Fetch and Format Journal Entries
-    journal_entries = fetch_journal_entries(user_id, 5)
-    formatted_journal_entries = "\n".join(journal_entries)
-
-    # Get Current Time
-    pt_timezone = pytz.timezone("US/Pacific")
-    current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
-
-    # Prepare System Prompt
-    system_prompt = ELLIE_PROMPT + SYSTEM_PROMPT.format(
-        current_datetime, formatted_journal_entries
-    )
-
-    logger.info(f"SYSTEM_PROMPT: {system_prompt}")
-
-    # Add SYSTEM_PROMPT to User Messages Context
-    context.user_data['messages'].append(system_prompt)
-
-    # Start Chat Session
+    await update.message.reply_text("Contacting Ellie.")
+    start_prompt = generate_start_prompt()
     context.user_data['chat_session'] = genai.GenerativeModel(
-        model_name=MODEL_NAME, generation_config=GENERATION_CONFIG, safety_settings=safety_settings
-    ).start_chat()
-    context.user_data['chat_session'].send_message(system_prompt)
+                                                        model_name=MODEL_NAME ,
+                                                        generation_config=GENERATION_CONFIG,
+                                                        safety_settings=safety_settings,
+                                                        system_instruction=start_prompt,
+                                                        ).start_chat()
+    llm_response = context.user_data['chat_session'].send_message("Hi. Ellie").text
+    context.user_data['messages'].append(f"{username}: {llm_response}")
+    logger.info(f'ELLIE: {llm_response}')
+    context.user_data['messages'].append(f"ELLIE: {llm_response}")
 
-    user_prompt = f"New Message from: {username}. Hi."
-    context.user_data['messages'].append(user_prompt)
-    context.user_data['chat_session'].send_message(user_prompt)
-    
-    llm_response = context.user_data['chat_session'].last
-    logger.info(f'llm_response: {llm_response.text}')    
-    context.user_data['messages'].append(llm_response.text) 
-
-    await update.message.reply_text(llm_response.text)
+    await update.message.reply_text(llm_response)
 
     return LISTEN
 
@@ -174,24 +180,22 @@ async def no_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 
 async def listen(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
-    username = user.username if user.username else "User"
+    username = user.first_name if user.first_name else "User"
     user_message = update.message.text  # Get user message directly
     logger.info(f"Listening: @{user.username}: {user_message}")
 
     try:
-        uuser_message = update.message.text
-        context.user_data['messages'].append(user_message)
-
+        user_message = update.message.text
+        context.user_data['messages'].append(f"{username}: {user_message}")
+        
         # Get the LLM response (extract text only)
         llm_response = context.user_data['chat_session'].send_message(user_message).text
-        #logger.info("LLM Response: %s", llm_response)
-        context.user_data['messages'].append(llm_response)
+        
+        context.user_data['messages'].append(f"ELLIE: {llm_response}")
 
     except Exception as e:
         logger.error(f"Error generating LLM response: {e}")
         return LISTEN  # Stay in the LISTEN state for error recovery
-
-    context.user_data['messages'].append(llm_response) # Add LLM response to messages list
 
     await update.message.reply_text(
         llm_response, reply_markup=ReplyKeyboardMarkup([["/journal", "/end"]], resize_keyboard=True)
@@ -227,6 +231,7 @@ async def recent_use_no(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
     logger.info("%s requested a journal entry.", user.first_name)
+    logger.warning("---- Starting journal entry ----")
     await update.message.reply_text("Working on your journal entry...")
 
     messages = context.user_data.get('messages', [])
@@ -235,28 +240,39 @@ async def journal(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
 
     conversation_history = "\n".join([
-        f"{m.text}" if hasattr(m, 'text') else f"{m}"  # Handle strings and message objects
+        f"{m}" if hasattr(m, 'text') else f"{m}"  # Handle strings and message objects
         for m in messages
     ])
+    logger.info("---------Conversation History: %s", conversation_history)
 
     journal_prompt = ELLIE_PROMPT + JOURNAL_PROMPT.format(current_datetime, conversation_history)
 
     # Send the journal_prompt to Google AI and store in journal_entry
-    journal_entry = genai.generate_text(prompt=journal_prompt, **GENERATION_CONFIG, safety_settings=safety_settings).result
-    print(journal_entry)
+    journal_entry = genai.generate_text(
+        prompt=journal_prompt, 
+        **GENERATION_CONFIG, 
+        safety_settings=safety_settings,
+        ).result
+    logger.info("---------Journal: %s", journal_entry)
     
     await update.message.reply_text("Working on my thoughts...")
 
-    reflection_prompt = ELLIE_PROMPT + REFLECTION_PROMPT + f"\n\n### START Chat Transcripts:\n{conversation_history}### END Chat Transcripts:"
+    reflection_prompt = REFLECTION_PROMPT + f"\n\n### START Chat Transcripts:\n{conversation_history}### END Chat Transcripts:"
 
     # Send the reflection_prompt to Google AI and store in reflection
-    reflection = genai.generate_text(prompt=reflection_prompt, **GENERATION_CONFIG, safety_settings=safety_settings).result
+    reflection = genai.generate_text(
+        prompt=reflection_prompt, 
+        **GENERATION_CONFIG, 
+        safety_settings=safety_settings,
+        ).result
     logger.info("---------Reflection: %s", reflection)
 
     insert_journal_entry(user.id, journal_entry, reflection)
 
     await update.message.reply_text(journal_entry)
-    return LISTEN
+
+    # Send the user back to the start of the conversation flow
+    return END
 
 async def get_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
@@ -272,16 +288,33 @@ async def get_context(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
             return AUTHENTICATE
         
     messages = context.user_data.get('messages', [])
-
     pt_timezone = pytz.timezone("US/Pacific")
     current_datetime = datetime.now(pt_timezone).strftime("%Y-%m-%d %H:%M")
-
-    conversation_history = "\n".join([
-        f"{m.text}" if hasattr(m, 'text') else f"{m}"  # Handle strings and message objects
-        for m in messages
-    ])
     
-    await update.message.reply_text(conversation_history[:200], parse_mode='Markdown')
+    # Check if messages are empty
+    if not messages:
+        await update.message.reply_text("No conversation history yet.")
+        return LISTEN
+
+    conversation_history = []
+    current_chunk = ""
+    MAX_CHUNK_SIZE = 500
+
+    for message in messages:
+        message_text = message.text if hasattr(message, 'text') else str(message)
+        if message_text.strip():  # Ensure message_text is not just whitespace
+            if len(current_chunk) + len(message_text) + 1 > MAX_CHUNK_SIZE:
+                conversation_history.append(current_chunk)
+                current_chunk = ""
+            current_chunk += message_text + "\n"  
+
+    if current_chunk:
+        conversation_history.append(current_chunk)
+
+    # Send the conversation history in multiple chunks
+    for chunk in conversation_history:
+        if chunk.strip(): # Ensure chunk is not just whitespace
+            await update.message.reply_text(chunk, parse_mode='Markdown')
     return LISTEN
 
 async def end(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -346,6 +379,8 @@ def main():
                 CommandHandler("yes", yes_continue),
                 CommandHandler("no", no_continue),
             ],
+            # END state to explicitly handle the end of the conversation
+            END: [MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
         allow_reentry=True,
@@ -353,8 +388,8 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("authorize", authorize_user))
-    application.add_handler(CommandHandler("get_context", get_context))
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
+    # generate_start_prompt()
     main()
