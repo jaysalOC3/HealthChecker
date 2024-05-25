@@ -17,6 +17,7 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
+from httpx import ReadError
 
 import os
 from dotenv import load_dotenv
@@ -27,7 +28,7 @@ load_dotenv()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -359,6 +360,22 @@ async def authorize_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except ValueError:
         await update.message.reply_text("Invalid command format. Use /authorize <user_id> <token>")
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    try:
+        raise context.error
+    except ReadError as e:
+        # Handle network error
+        logger.error("Network error occurred: %s", str(e))
+        # You can send a message to the user or perform any other necessary action
+        if update:
+            await update.message.reply_text("Sorry, a network error occurred. Please try again later.")
+    except Exception as e:
+        # Handle other exceptions
+        logger.error("An error occurred: %s", str(e))
+        # You can send a message to the user or perform any other necessary action
+        if update:
+            await update.message.reply_text("Sorry, an error occurred. Please try again later.")
+
 def main():
     application = Application.builder().token("6308464888:AAEg12EbOv3Bm5klIQaOpBR0L_VvLdTbqn8").build()
     create_database()
@@ -388,6 +405,7 @@ def main():
 
     application.add_handler(conv_handler)
     application.add_handler(CommandHandler("authorize", authorize_user))
+    application.add_error_handler(error_handler)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
