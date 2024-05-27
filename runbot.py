@@ -28,7 +28,7 @@ load_dotenv()
 
 # Enable logging
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.WARNING
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
@@ -55,6 +55,7 @@ safety_settings = [
 # Constants
 ADMIN_USER_ID = 7133140884
 AUTHENTICATE, RECENT_USE, LISTEN, END = range(4)
+BOT_NAME, BOT_BACKSTORY, BOT_PROMPT = range(3)
 
 # Load Prompts (using a function)
 def read_prompt(filename):
@@ -63,6 +64,9 @@ def read_prompt(filename):
 
 
 ELLIE_PROMPT = read_prompt("ellie_prompt.txt")
+START_PROMPT_0 = read_prompt("START_PROMPT_0.txt")
+BOT_SETUP_START = read_prompt("bot_setup_start.txt")
+BOT_SETUP_PROMPT = read_prompt("bot_setup_prompt.txt")
 FEEDBACK_PROMPT = read_prompt("feedback_prompt.txt")
 START_PROMPT = read_prompt("start_prompt.txt")
 REFLECTION_PROMPT = read_prompt("reflection_prompt.txt")
@@ -75,7 +79,12 @@ def create_database():
         c.execute('''CREATE TABLE IF NOT EXISTS entries
                      (user_id INTEGER, entry TEXT, reflection TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
         c.execute('''CREATE TABLE IF NOT EXISTS authorized_users
-                     (user_id INTEGER PRIMARY KEY, token TEXT)''')
+                    (user_id INTEGER PRIMARY KEY, 
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP, 
+                        token TEXT, 
+                        bot_name TEXT, 
+                        bot_sp TEXT
+                    )''')
 
 def fetch_user_token(user_id):
     with sqlite3.connect('journal_entries.db') as conn:
@@ -107,10 +116,10 @@ def insert_authorized_user(user_id, token):
         c.execute("INSERT OR REPLACE INTO authorized_users (user_id, token) VALUES (?, ?)", (user_id, token))
         conn.commit()
 
-def generate_start_prompt():
+def generate_start_prompt(agent_prompt):
     llminput = FEEDBACK_PROMPT
     reflectioninput = fetch_reflection_entries(ADMIN_USER_ID)
-    llminput += "ORIGINAL SYSTEM PROMPT:\n" +  ELLIE_PROMPT + "=== END ORIGINAL SYSTEM PROMPT ===\n\n"
+    llminput += "ORIGINAL SYSTEM PROMPT:\n" +  agent_prompt + "=== END ORIGINAL SYSTEM PROMPT ===\n\n"
     llminput += "CONVERSATION FEEDBACK:\n"
     for item in reflectioninput:
         llminput += f"\n{item}\n"
@@ -125,6 +134,30 @@ def generate_start_prompt():
                                 ).start_chat().send_message("\n").text
     logger.info(f"NEW SYSTEM PROMPT: {new_system_prompt}")
     return new_system_prompt
+
+def bot_setup():
+    logger.info("Welcome: Experience journaling like never before. Dive into meaningful conversations with your own AI bot, designed to help you understand yourself better.  Save your interactive journal with /journal, and let your bot surprise you with thoughtful messages.")
+    llminput = BOT_SETUP_START
+    new_bot_chat = genai.GenerativeModel(
+                                            model_name=MODEL_NAME ,
+                                            generation_config=GENERATION_CONFIG,
+                                            safety_settings=safety_settings,
+                                            system_instruction=llminput,
+                                ).start_chat()
+    bot_name = input("Let's start by naming your bot. ")
+    log_name = new_bot_chat.send_message(f"Your name is: {bot_name}").text
+    logger.info(log_name)
+    
+    bot_gender = input("Is your bot Male or Female. ")
+    log_gender = new_bot_chat.send_message(f"Your gender is: {bot_gender}").text
+    logger.info(log_gender)
+
+    bot_backstory = input("Please provide your bot's backstory. (< 1000 charaters) ")
+    log_backstory = new_bot_chat.send_message(f"Your gender is: {bot_backstory}").text
+    logger.info(log_backstory)
+
+    log_bot_prompt = new_bot_chat.send_message(f"Respond with only a system prompt that incorporates my customized instructions and name into new system prompt.").text
+    logger.info(log_bot_prompt)
 
 # Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -143,10 +176,17 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             )
             return AUTHENTICATE
 
+    start_prompt = ""
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT bot_sp FROM authorized_users WHERE user_id = ? LIMIT 1", (int(user_id),))
+        start_prompt = generate_start_prompt(c.fetchone()[0])
+        logger.info(f"START_PROMPT: {start_prompt}")
+
     username = user.first_name if user.first_name else "User"
     logger.info(f"User started conversation: {user_id}")
     await update.message.reply_text("Contacting Ellie.")
-    start_prompt = generate_start_prompt()
+    
     context.user_data['chat_session'] = genai.GenerativeModel(
                                                         model_name=MODEL_NAME ,
                                                         generation_config=GENERATION_CONFIG,
@@ -154,7 +194,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                                                         system_instruction=start_prompt,
                                                         ).start_chat()
     llm_response = context.user_data['chat_session'].send_message("Hi. Ellie").text
-    context.user_data['messages'].append(f"{username}: {llm_response}")
     logger.info(f'ELLIE: {llm_response}')
     context.user_data['messages'].append(f"ELLIE: {llm_response}")
 
@@ -162,6 +201,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     return LISTEN
 
+async def setup_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    user_id = user.id
+
+    # Initialize 'messages' list here
+    context.user_data['messages'] = []
+
+    # Authentication Check
+    if user_id != ADMIN_USER_ID:
+        token = fetch_user_token(user_id)
+        if not token:
+            await update.message.reply_text(
+                "You are not authorized. Provide the access token."
+            )
+            return AUTHENTICATE
+    await context.bot.send_message(chat_id=update.effective_chat.id, text="Welcome: Experience journaling like never before. Dive into meaningful conversations with your own AI bot, designed to help you understand yourself better.  Save your interactive journal with /journal, and let your bot surprise you with thoughtful messages.")
+    llminput = BOT_SETUP_START
+    context.user_data['new_bot_chat'] = genai.GenerativeModel(
+                                            model_name=MODEL_NAME ,
+                                            generation_config=GENERATION_CONFIG,
+                                            safety_settings=safety_settings,
+                                            system_instruction=llminput,
+                                ).start_chat()
+    await update.message.reply_text("Let's start by naming your bot.")
+    logger.info("End Setup Bot > Bot Name")
+    return BOT_NAME
+
+async def bot_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    bot_name = update.message.text
+    bot_prompt = context.user_data['new_bot_chat'].send_message(f"Your name is: {bot_name}").text
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute(f'''INSERT OR REPLACE INTO authorized_users (user_id, bot_name)
+                     VALUES ({update.message.from_user.id}, '{bot_name}');''')
+    logger.info(f"Bot's name set to: {bot_name}: {bot_prompt}")
+    await update.message.reply_text("Please provide your bot's main goal. (< 1000 characters)")
+    return BOT_BACKSTORY
+
+async def bot_backstory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    bot_backstory = update.message.text
+    log_backstory = context.user_data['new_bot_chat'].send_message(f"Your goal is: {bot_backstory}").text
+    logger.info(f"New Back Story: {log_backstory}")
+    log_backstory = context.user_data['new_bot_chat'].send_message(BOT_SETUP_PROMPT).text
+    logger.info(f"New Back Story: {log_backstory}")
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute(f'''INSERT OR REPLACE INTO authorized_users (user_id, bot_sp)
+                     VALUES ({update.message.from_user.id}, '{log_backstory.replace("'","")}');''')
+    await update.message.reply_text(f"Your bot is ready! Here's the system prompt:\n\n{log_backstory}")
+    return END
 
 async def yes_continue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.message.from_user
@@ -380,6 +469,20 @@ def main():
     application = Application.builder().token("6308464888:AAEg12EbOv3Bm5klIQaOpBR0L_VvLdTbqn8").build()
     create_database()
 
+    setup_bot_handler = ConversationHandler(
+        entry_points=[CommandHandler("setup", setup_bot)],
+        states={
+            AUTHENTICATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, authenticate)],
+            BOT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot_name)],
+            BOT_BACKSTORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, bot_backstory)],
+            END: [MessageHandler(filters.TEXT & ~filters.COMMAND, start)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    allow_reentry=True,
+    )
+
+    application.add_handler(setup_bot_handler)
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -409,5 +512,6 @@ def main():
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    # generate_start_prompt()
+    #bot_setup()
+    #generate_start_prompt()
     main()
