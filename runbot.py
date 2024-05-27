@@ -91,6 +91,12 @@ def fetch_user_token(user_id):
         c = conn.cursor()
         c.execute("SELECT token FROM authorized_users WHERE user_id = ?", (user_id,))
         return c.fetchone()
+    
+def fetch_bot_name(user_id):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT bot_name FROM authorized_users WHERE user_id = ?", (user_id,))
+        return c.fetchone()
 
 def fetch_journal_entries(user_id, limit=1):
     with sqlite3.connect('journal_entries.db') as conn:
@@ -120,7 +126,7 @@ def generate_start_prompt(agent_prompt):
     llminput = FEEDBACK_PROMPT
     reflectioninput = fetch_reflection_entries(ADMIN_USER_ID)
     llminput += "ORIGINAL SYSTEM PROMPT:\n" +  agent_prompt + "=== END ORIGINAL SYSTEM PROMPT ===\n\n"
-    llminput += "CONVERSATION FEEDBACK:\n"
+    llminput += "FEEDBACK FOR IMPROVEMENT:\n"
     for item in reflectioninput:
         llminput += f"\n{item}\n"
     llminput += "=== END FEEDBACK ===\n"
@@ -132,32 +138,7 @@ def generate_start_prompt(agent_prompt):
                                             safety_settings=safety_settings,
                                             system_instruction=llminput,
                                 ).start_chat().send_message("\n").text
-    logger.info(f"NEW SYSTEM PROMPT: {new_system_prompt}")
     return new_system_prompt
-
-def bot_setup():
-    logger.info("Welcome: Experience journaling like never before. Dive into meaningful conversations with your own AI bot, designed to help you understand yourself better.  Save your interactive journal with /journal, and let your bot surprise you with thoughtful messages.")
-    llminput = BOT_SETUP_START
-    new_bot_chat = genai.GenerativeModel(
-                                            model_name=MODEL_NAME ,
-                                            generation_config=GENERATION_CONFIG,
-                                            safety_settings=safety_settings,
-                                            system_instruction=llminput,
-                                ).start_chat()
-    bot_name = input("Let's start by naming your bot. ")
-    log_name = new_bot_chat.send_message(f"Your name is: {bot_name}").text
-    logger.info(log_name)
-    
-    bot_gender = input("Is your bot Male or Female. ")
-    log_gender = new_bot_chat.send_message(f"Your gender is: {bot_gender}").text
-    logger.info(log_gender)
-
-    bot_backstory = input("Please provide your bot's backstory. (< 1000 charaters) ")
-    log_backstory = new_bot_chat.send_message(f"Your gender is: {bot_backstory}").text
-    logger.info(log_backstory)
-
-    log_bot_prompt = new_bot_chat.send_message(f"Respond with only a system prompt that incorporates my customized instructions and name into new system prompt.").text
-    logger.info(log_bot_prompt)
 
 # Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -183,6 +164,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         start_prompt = generate_start_prompt(c.fetchone()[0])
         logger.info(f"START_PROMPT: {start_prompt}")
 
+    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute('''
+        UPDATE authorized_users
+        SET bot_sp = ?, timestamp = ?
+        WHERE user_id = ?
+        ''', (start_prompt.replace("'",""), current_timestamp, user_id))
+
     username = user.first_name if user.first_name else "User"
     logger.info(f"User started conversation: {user_id}")
     await update.message.reply_text("Contacting Ellie.")
@@ -193,7 +184,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                                                         safety_settings=safety_settings,
                                                         system_instruction=start_prompt,
                                                         ).start_chat()
-    llm_response = context.user_data['chat_session'].send_message("Hi. Ellie").text
+    llm_response = context.user_data['chat_session'].send_message(f"Hi {fetch_bot_name(user_id)}. Here's {user.first_name} old journals before we work on this new one. {fetch_journal_entries(user_id, 5)}. Can you please get us started.").text
     logger.info(f'ELLIE: {llm_response}')
     context.user_data['messages'].append(f"ELLIE: {llm_response}")
 
