@@ -74,6 +74,7 @@ JOURNAL_PROMPT = read_prompt("journal_prompt.txt")
 
 # Database Functions
 def create_database():
+    logger.warning(f'Creating new database!')
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
         c.execute('''CREATE TABLE IF NOT EXISTS entries
@@ -93,24 +94,62 @@ def fetch_user_token(user_id):
         return c.fetchone()
     
 def fetch_bot_name(user_id):
+    logger.warning(f'Fetch Bot Name:')
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
         c.execute("SELECT bot_name FROM authorized_users WHERE user_id = ?", (user_id,))
         return c.fetchone()
+    
+def update_bot_name(user_id, name):
+    logger.warning(f'Update Bot Name:')
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute(f'''INSERT OR REPLACE INTO authorized_users (user_id, bot_name)
+                     VALUES ({user_id}, '{name}');''')
+    
+def fetch_bot_sp(user_id):
+    logger.warning(f'Fetch Bot SYSTEM PROMPT:')
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT bot_sp FROM authorized_users WHERE user_id = ? LIMIT 1", (int(user_id),))
+        return generate_start_prompt(c.fetchone()[0])
+    return "ERROR: Unable to get bot SYSTEM PROMPT."
+
+def update_bot_sp(user_id, backstory):
+    logger.warning(f'Update Bot SYSTEM PROMPT:')
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute(f'''INSERT OR REPLACE INTO authorized_users (user_id, bot_sp)
+                     VALUES ({user_id}, '{backstory.replace("'","")}');''')
+    return "ERROR: Unable to get bot SYSTEM PROMPT."
+
+def update_bot_sp(user_id, sp):
+    logger.warning(f'Update Bot SYSTEM PROMPT:')
+    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute('''
+        UPDATE authorized_users
+        SET bot_sp = ?, timestamp = ?
+        WHERE user_id = ?
+        ''', (sp.replace("'",""), current_timestamp, user_id))
 
 def fetch_journal_entries(user_id, limit=1):
+    logger.warning(f'Fetch Journal Entries:')
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
         c.execute("SELECT entry FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
         return [entry[0] for entry in c.fetchall()]
 
 def fetch_reflection_entries(user_id, limit=1):
+    logger.warning(f'Fetch Reflection Entries:')
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
         c.execute("SELECT reflection FROM entries WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?", (user_id, limit))
         return [entry[0] for entry in c.fetchall()]
     
 def insert_journal_entry(user_id, entry, reflection):
+    logger.warning(f'Writing Journal Entries:')
     with sqlite3.connect('journal_entries.db') as conn:
         c = conn.cursor()
         c.execute("INSERT INTO entries (user_id, entry, reflection) VALUES (?, ?, ?)", (user_id, entry, reflection))
@@ -157,22 +196,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
             )
             return AUTHENTICATE
 
-    start_prompt = ""
-    with sqlite3.connect('journal_entries.db') as conn:
-        c = conn.cursor()
-        c.execute("SELECT bot_sp FROM authorized_users WHERE user_id = ? LIMIT 1", (int(user_id),))
-        start_prompt = generate_start_prompt(c.fetchone()[0])
-        logger.info(f"START_PROMPT: {start_prompt}")
-
-    current_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    with sqlite3.connect('journal_entries.db') as conn:
-        c = conn.cursor()
-        c.execute('''
-        UPDATE authorized_users
-        SET bot_sp = ?, timestamp = ?
-        WHERE user_id = ?
-        ''', (start_prompt.replace("'",""), current_timestamp, user_id))
+    start_prompt = fetch_bot_sp(user_id)
+    update_bot_sp(user_id, start_prompt)
 
     username = user.first_name if user.first_name else "User"
     logger.info(f"User started conversation: {user_id}")
@@ -184,7 +209,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                                                         safety_settings=safety_settings,
                                                         system_instruction=start_prompt,
                                                         ).start_chat()
-    llm_response = context.user_data['chat_session'].send_message(f"Hi {fetch_bot_name(user_id)}. Here's {user.first_name} old journals before we work on this new one. {fetch_journal_entries(user_id, 5)}. Can you please get us started.").text
+    llm_response = context.user_data['chat_session'].send_message(f"Hi {fetch_bot_name(user_id)}. Here's {user.first_name} old journals before we work on this new one. {fetch_journal_entries(user_id, 5)}. Ask a relevant question.").text
     logger.info(f'ELLIE: {llm_response}')
     context.user_data['messages'].append(f"ELLIE: {llm_response}")
 
@@ -220,26 +245,26 @@ async def setup_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return BOT_NAME
 
 async def bot_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    user_id = user.id
+
     bot_name = update.message.text
     bot_prompt = context.user_data['new_bot_chat'].send_message(f"Your name is: {bot_name}").text
-    with sqlite3.connect('journal_entries.db') as conn:
-        c = conn.cursor()
-        c.execute(f'''INSERT OR REPLACE INTO authorized_users (user_id, bot_name)
-                     VALUES ({update.message.from_user.id}, '{bot_name}');''')
+    update_bot_name(user_id, bot_name)
     logger.info(f"Bot's name set to: {bot_name}: {bot_prompt}")
     await update.message.reply_text("Please provide your bot's main goal. (< 1000 characters)")
     return BOT_BACKSTORY
 
 async def bot_backstory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user = update.message.from_user
+    user_id = user.id
+    
     bot_backstory = update.message.text
     log_backstory = context.user_data['new_bot_chat'].send_message(f"Your goal is: {bot_backstory}").text
     logger.info(f"New Back Story: {log_backstory}")
     log_backstory = context.user_data['new_bot_chat'].send_message(BOT_SETUP_PROMPT).text
     logger.info(f"New Back Story: {log_backstory}")
-    with sqlite3.connect('journal_entries.db') as conn:
-        c = conn.cursor()
-        c.execute(f'''INSERT OR REPLACE INTO authorized_users (user_id, bot_sp)
-                     VALUES ({update.message.from_user.id}, '{log_backstory.replace("'","")}');''')
+    update_bot_sp(user_id, log_backstory)
     await update.message.reply_text(f"Your bot is ready! Here's the system prompt:\n\n{log_backstory}")
     return END
 
