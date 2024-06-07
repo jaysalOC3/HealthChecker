@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 # pylint: disable=unused-argument
 # This program is dedicated to the public domain under the CC0 license.
+import os
+# Get the path of the current script's directory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# Change the current working directory to the script's directory
+os.chdir(script_dir)
 
 import logging
 import sqlite3
@@ -19,7 +24,6 @@ from telegram.ext import (
 )
 from httpx import ReadError
 
-import os
 from dotenv import load_dotenv
 
 import google.generativeai as genai
