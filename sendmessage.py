@@ -34,7 +34,7 @@ def read_prompt_file(filename):
     with open(f"prompts/{filename}", "r") as file:
         return file.read()
 
-ELLIE_PROMPT = read_prompt_file("ellie_prompt.txt")
+ELLIE_PROMPT = ""
 
 SYSTEM_PROMPT = ELLIE_PROMPT + """
 After reading each personal journal entry, take a moment to reflect on the writer's experiences, emotions, and aspirations that they have chosen to share. Consider their words carefully and empathetically. Then, craft a thoughtful message of support and encouragement, tailored to their unique situation and goals. Your message should make them feel heard, validated, and motivated to keep moving forward.
@@ -65,6 +65,13 @@ schedule = {
 }
 
 async def send_message(user_id, message):
+    with sqlite3.connect('journal_entries.db') as conn:
+        c = conn.cursor()
+        c.execute("SELECT bot_sp, topic FROM authorized_users WHERE user_id = ? LIMIT 1", (int(user_id),))
+        result = c.fetchone()
+    
+    ELLIE_PROMPT = result[0]
+
     journal_prompt = SYSTEM_PROMPT.format(message)
     
     chat_session = model.start_chat(
