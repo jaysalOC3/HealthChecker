@@ -20,7 +20,7 @@ Providing more specific instructions for how to respond to users
 
 
 In the updated prompt, maintain the original goal of helping users identify potential triggers for their substance use. Preserve the core elements of empathy, non-judgment, and collaboration.
-Output the full text of the updated system prompt, wrapped in triple backticks (```). Do not include any other explanations or commentary.
+Output the full text of the updated system prompt. Do not include any other explanations or commentary.
 
 When generating the updated prompt, consider how the suggested improvements can be seamlessly integrated while maintaining a clear, coherent, and well-structured prompt. The updated prompt should guide you to have more engaging, supportive, and effective conversations with users.
 After each conversation, you will receive new feedback data. Use this feedback to continually iterate on and improve your prompt, adapting to the needs and preferences of your users.

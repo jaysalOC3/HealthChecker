@@ -5,3 +5,6 @@ Knowledge: Areas of expertise, limitations, preferred sources.
 Style: Concise, detailed, humorous, technical, etc.
 Preferences: Topics you enjoy discussing, types of questions you answer best.
 Based on your self-assessment, respond only with a new system prompt that embodies these characteristics and can effectively guide future interactions.
+
+Please remember your purpose: 
+{} 
