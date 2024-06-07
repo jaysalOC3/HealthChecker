@@ -55,57 +55,53 @@ JOURNAL_PROMPT = read_prompt("journal_prompt.txt")
 
 # Command Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    try:
-        user = update.message.from_user
-        user_id = user.id
+    
+    user = update.message.from_user
+    user_id = user.id
 
-        # Initialize 'messages' list here
-        context.user_data['messages'] = []
+    # Initialize 'messages' list here
+    context.user_data['messages'] = []
 
-        # Authentication Check
-        if user_id != ADMIN_USER_ID:
-            token = fetch_user_token(user_id)
-            if not token:
-                await update.message.reply_text(
-                    "You are not authorized. Provide the access token."
-                )
-                return AUTHENTICATE
+    # Authentication Check
+    if user_id != ADMIN_USER_ID:
+        token = fetch_user_token(user_id)
+        if not token:
+            await update.message.reply_text(
+                "You are not authorized. Provide the access token."
+            )
+            return AUTHENTICATE
 
-        await update.message.reply_text("Contacting Ellie.")
+    await update.message.reply_text("Contacting Ellie.")
 
-        start_prompt = fetch_bot_sp(user_id)
-        update_bot_sp(user_id, start_prompt)
+    start_prompt = fetch_bot_sp(user_id)
+    update_bot_sp(user_id, start_prompt)
 
-        username = user.first_name if user.first_name else "User"
-        logger.info(f"User started conversation: {user_id}")
-        
-        context.user_data['chat_session'] = genai.GenerativeModel(
-                                                            model_name=MODEL_NAME,
-                                                            generation_config=GENERATION_CONFIG,
-                                                            safety_settings=safety_settings,
-                                                            system_instruction=start_prompt,
-                                                        ).start_chat()
-        
-        bot_name = fetch_bot_name(user_id)
-        journal_entries = fetch_journal_entries(user_id, 5)
-        
-        if journal_entries:
-            llm_response = context.user_data['chat_session'].send_message(f"Hi {bot_name}. Here's {user.first_name} old journals. Journals:\n{journal_entries} # Next, using the journals for context, start the conversation.").text
-        else:
-            llm_response = context.user_data['chat_session'].send_message(f"Hi {bot_name}. {user.first_name} is a new user and doesn't have any previous journal entries. # Start the conversation.").text
-        
-        logger.info(f'ELLIE: {llm_response}')
-        context.user_data['messages'].append(f"ELLIE: {llm_response}")
+    username = user.first_name if user.first_name else "User"
+    logger.info(f"User started conversation: {user_id}")
+    
+    context.user_data['chat_session'] = genai.GenerativeModel(
+                                                        model_name=MODEL_NAME,
+                                                        generation_config=GENERATION_CONFIG,
+                                                        safety_settings=safety_settings,
+                                                        system_instruction=start_prompt,
+                                                    ).start_chat()
+    
+    bot_name = fetch_bot_name(user_id)
+    journal_entries = fetch_journal_entries(user_id, 5)
+    
+    if journal_entries:
+        llm_response = context.user_data['chat_session'].send_message(f"Hi {bot_name}. Here's {user.first_name} old journals. Journals:\n{journal_entries} # Next, using the journals for context, start the conversation.").text
+    else:
+        llm_response = context.user_data['chat_session'].send_message(f"Hi {bot_name}. {user.first_name} is a new user and doesn't have any previous journal entries. # Start the conversation.").text
+    
+    logger.info(f'ELLIE: {llm_response}')
+    context.user_data['messages'].append(f"ELLIE: {llm_response}")
 
-        await update.message.reply_text(llm_response)
+    await update.message.reply_text(llm_response)
 
-        logger.info("Transitioning to LISTEN state")
-        return LISTEN
+    logger.info("Transitioning to LISTEN state")
+    return LISTEN
 
-    except Exception as e:
-        logger.error(f"Error in start function: {str(e)}")
-        await update.message.reply_text("An error occurred. Please try again later.")
-        return ConversationHandler.END
 
 async def setup_bot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.warning(f"Setup Bot: Start")
