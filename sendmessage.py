@@ -1,12 +1,17 @@
+import os
+# Get the path of the current script's directory
+script_dir = os.path.dirname(os.path.abspath(__file__))
+# Change the current working directory to the script's directory
+os.chdir(script_dir)
+
+from dotenv import load_dotenv
+load_dotenv()
+
 import sqlite3
 import asyncio
 import datetime
 from telegram import Bot
 import argparse
-
-import os
-from dotenv import load_dotenv
-load_dotenv()
 
 import google.generativeai as genai
 genai.configure(api_key=os.environ["GEMINI_API_KEY"])
